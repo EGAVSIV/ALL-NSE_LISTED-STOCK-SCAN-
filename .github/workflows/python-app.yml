@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
 
   schedule:
-    # Monday-Friday at 5:30 PM IST (12:00 UTC)
-    - cron: "0 12 * * 1-5"
+    # Monday to Friday at 4:00 PM IST (10:30 UTC)
+    - cron: "30 10 * * 1-5"
 
 permissions:
   contents: write
@@ -38,7 +38,7 @@ jobs:
           pip install XlsxWriter
           pip install git+https://github.com/rongardF/tvdatafeed.git
 
-      - name: Verify Installation
+      - name: Verify tvDatafeed Installation
         run: |
           python -c "from tvDatafeed import TvDatafeed, Interval; print('tvDatafeed Installed Successfully')"
 
@@ -49,16 +49,47 @@ jobs:
         run: |
           python Fetchdata.py
 
-      - name: Commit Updated Files
+      - name: Show Generated Files
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          echo "========== Current Directory =========="
+          pwd
 
-          git add stock_data/
+          echo ""
+          echo "========== Repository Files =========="
+          ls -R
+
+          echo ""
+          echo "========== Daily Files =========="
+          ls -lh stock_data_D || true
+
+          echo ""
+          echo "========== Weekly Files =========="
+          ls -lh stock_data_W || true
+
+          echo ""
+          echo "========== Monthly Files =========="
+          ls -lh stock_data_M || true
+
+      - name: Commit and Push Changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add stock_data_D/ || true
+          git add stock_data_W/ || true
+          git add stock_data_M/ || true
+          git add download_log.txt || true
+          git add error_symbols.txt || true
 
           if git diff --cached --quiet; then
-            echo "No changes to commit."
+            echo "No changes detected."
           else
-            git commit -m "Auto Update Stock Data"
+            git commit -m "Auto Update Stock Data - $(date -u '+%Y-%m-%d %H:%M UTC')"
             git push
           fi
+
+      - name: Workflow Complete
+        run: |
+          echo "===================================="
+          echo "Stock Data Update Completed"
+          echo "===================================="
