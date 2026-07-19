@@ -1,61 +1,32 @@
-import pandas as pd
-from tvDatafeed import TvDatafeed, Interval
+import os, time, socket, ssl, multiprocessing as mp
 from datetime import datetime
-import socket, ssl, time, os
+from tvDatafeed import TvDatafeed, Interval
 
-# === TV Datafeed Login ===
-username = "EGAVSIV"
-password = "Eric$1234"
-tv = TvDatafeed(username, password)
+# ==============================
+# TradingView Credentials
+# ==============================
+USERNAME = "EGAVSIV"
+PASSWORD = "Eric$1234"
+tv = TvDatafeed(USERNAME, PASSWORD)
 
-# === Only Required Timeframes ===
-interval_map = {
-    'D': Interval.in_daily,
-    'W': Interval.in_weekly,
-    'M': Interval.in_monthly
+# ==============================
+# Timeframes → Folder Mapping
+# ==============================
+TIMEFRAMES = {
+    "D":  (Interval.in_daily,   "stock_data_D"),
+    "W":  (Interval.in_weekly,  "stock_data_W"),
+    "M":  (Interval.in_monthly, "stock_data_M"),
+    "15": (Interval.in_15_minute, "stock_data_15"),
+    "1H": (Interval.in_1_hour,  "stock_data_1H"),
 }
 
-# === Output Folder ===
-output_dir = "stock_data"
-os.makedirs(output_dir, exist_ok=True)
+BARS = 4000
+RETRY_DELAY = 3
+MAX_RETRY = 5
 
-# === Delay for retries ===
-retry_delay = 3  # seconds
-
-# === Fetch with infinite retry ===
-def fetch_with_retry(symbol, label, interval):
-    attempt = 1
-    while True:
-        try:
-            df = tv.get_hist(symbol=symbol, exchange='NSE', interval=interval, n_bars=1000)
-            if df is not None and not df.empty:
-                df['timeframe'] = label
-                return df
-            else:
-                print(f"⚠️ Empty data for {symbol} [{label}] (Attempt {attempt})")
-        except (socket.timeout, ssl.SSLError):
-            print(f"⏳ Timeout for {symbol} [{label}] (Attempt {attempt})")
-        attempt += 1
-        time.sleep(retry_delay)
-
-# === Fetch and Save for One Symbol ===
-def fetch_and_save_all(symbol):
-    symbol_data = {}
-
-    for label, interval in interval_map.items():
-        df = fetch_with_retry(symbol, label, interval)
-        if df is not None:
-            symbol_data[label] = df
-
-    if len(symbol_data) == len(interval_map):  # All timeframes received
-        df_all = pd.concat(symbol_data.values(), keys=symbol_data.keys(), names=['Timeframe'])
-        filepath = os.path.join(output_dir, f"{symbol}.parquet")
-        df_all.to_parquet(filepath)
-        print(f"✅ Saved: {symbol}")
-    else:
-        print(f"❌ Skipped {symbol} due to missing data.")
-
-# === Symbols List (Partial for testing) ===
+# ==============================
+# Symbols (sample)
+# ==============================
 symbols = [
    '20MICRONS','21STCENMGM','360ONE','3BBLACKBIO','3IINFOLTD','3MINDIA','3PLAND','5PAISA','63MOONS','A2ZINFRA','AAATECH','AADHARHFC','AAKASH',
     'AAREYDRUGS','AARNAV','AARON','AARTECH','AARTIDRUGS','AARTIIND','AARTIPHARM','AARTISURF','AARVI','AASTHA','AAVAS','ABAN','ABANSENT','ABB',
@@ -216,7 +187,76 @@ symbols = [
 
 ]
 
-# === Run for All Symbols ===
-for symbol in symbols:
-    fetch_and_save_all(symbol)
+# last update on 1 july 2026
+# ==============================
+# Logs (repo root)
+# ==============================
+LOG_FILE = "download_log.txt"
+ERROR_FILE = "error_symbols.txt"
+
+def log(msg):
+    with open(LOG_FILE, "a") as f:
+        f.write(f"{datetime.now()} | {msg}\n")
+    print(msg)
+
+def log_error(symbol, tf, err):
+    with open(ERROR_FILE, "a") as f:
+        f.write(f"{symbol},{tf},{err}\n")
+
+# ==============================
+# Fetch + Save
+# ==============================
+def fetch_save(args):
+    symbol, tf_label, interval, folder = args
+    os.makedirs(folder, exist_ok=True)
+    attempt = 1
+
+    while attempt <= MAX_RETRY:
+        try:
+            df = tv.get_hist(
+                symbol=symbol,
+                exchange="NSE",
+                interval=interval,
+                n_bars=BARS
+            )
+
+            if df is not None and not df.empty:
+                df.to_parquet(os.path.join(folder, f"{symbol}.parquet"))
+                log(f"[OK] {symbol} | TF:{tf_label}")
+                return
+
+            log(f"[EMPTY] {symbol} | TF:{tf_label} retry={attempt}")
+
+        except Exception as e:
+            msg = "Network error" if isinstance(e, (socket.timeout, ssl.SSLError)) else str(e)
+            log(f"[ERROR] {symbol} | TF:{tf_label} | {msg}")
+
+        attempt += 1
+        time.sleep(RETRY_DELAY)
+
+    log_error(symbol, tf_label, "Failed after retries")
+
+# ==============================
+# Runner
+# ==============================
+def run_all():
+    log("===== DOWNLOAD STARTED =====")
+
+    tasks = []
+    for tf_label, (interval, folder) in TIMEFRAMES.items():
+        for sym in symbols:
+            tasks.append((sym, tf_label, interval, folder))
+
+    workers = min(4, mp.cpu_count())
+    with mp.Pool(workers) as pool:
+        pool.map(fetch_save, tasks)
+
+    log("===== DOWNLOAD FINISHED =====")
+
+if __name__ == "__main__":
+    run_all()
+
+
+
+
 
